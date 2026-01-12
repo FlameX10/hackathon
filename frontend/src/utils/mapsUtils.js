@@ -1,19 +1,57 @@
+// Track if we're already loading the script
+let mapsLoadingPromise = null;
+const callbackName = '__googleMapsCallback_' + Date.now();
+
 // Utility function to load Google Maps script
 export const loadGoogleMapsScript = (apiKey) => {
-  return new Promise((resolve, reject) => {
+  // If already loaded, resolve immediately
+  if (window.google && window.google.maps) {
+    return Promise.resolve();
+  }
+
+  // If currently loading, return the existing promise
+  if (mapsLoadingPromise) {
+    return mapsLoadingPromise;
+  }
+
+  // Create new loading promise
+  mapsLoadingPromise = new Promise((resolve, reject) => {
+    // Check again in case it was loaded while we were setting up
     if (window.google && window.google.maps) {
       resolve();
       return;
     }
 
+    // Set up callback function
+    window[callbackName] = function() {
+      if (window.google && window.google.maps) {
+        resolve();
+      } else {
+        reject(new Error('Google Maps library did not initialize properly'));
+      }
+    };
+
+    // Check if script already exists in DOM
+    const existingScript = document.querySelector('script[src*="maps.googleapis.com"]');
+    if (existingScript && window.google && window.google.maps) {
+      resolve();
+      return;
+    }
+
     const script = document.createElement('script');
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=marker`;
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=marker&callback=${callbackName}`;
     script.async = true;
     script.defer = true;
-    script.onerror = () => reject(new Error('Failed to load Google Maps'));
-    script.onload = () => resolve();
+    
+    script.onerror = () => {
+      mapsLoadingPromise = null;
+      reject(new Error('Failed to load Google Maps script'));
+    };
+    
     document.head.appendChild(script);
   });
+
+  return mapsLoadingPromise;
 };
 
 // Calculate center of all mines
