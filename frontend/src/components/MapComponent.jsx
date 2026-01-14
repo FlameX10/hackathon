@@ -1,19 +1,24 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { loadGoogleMapsScript, calculateBounds } from '../utils/mapsUtils';
 
-const MapComponent = ({ mines, selectedMine, onMineSelect }) => {
+const MapComponent = ({ mines, selectedMine, onMineSelect, isLoading }) => {
   const mapRef = useRef(null);
   const [map, setMap] = useState(null);
   const [markers, setMarkers] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [clickMarker, setClickMarker] = useState(null);
   const [error, setError] = useState(null);
+  const markerRefsMap = useRef({});
 
   const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
+  // Initialize map
   useEffect(() => {
     if (!apiKey) {
       setError('Google Maps API key is not configured');
-      setLoading(false);
+      return;
+    }
+
+    if (!mapRef.current) {
       return;
     }
 
@@ -32,24 +37,23 @@ const MapComponent = ({ mines, selectedMine, onMineSelect }) => {
         });
 
         setMap(mapInstance);
-        setLoading(false);
       } catch (err) {
         setError(err.message);
-        setLoading(false);
       }
     };
 
     initMap();
-  }, [apiKey]);
+  }, [apiKey, mines]);
 
-  // Update markers when mines change
+  // Create and update markers
   useEffect(() => {
-    if (!map) return;
+    if (!map || !mines || mines.length === 0) return;
 
     // Clear existing markers
     markers.forEach((marker) => marker.setMap(null));
+    markerRefsMap.current = {};
 
-    // Create new markers
+    // Create new markers for all mines
     const newMarkers = mines.map((mine) => {
       const [lng, lat] = mine.geometry.coordinates;
       const isSelected = selectedMine && selectedMine.properties.mine_id === mine.properties.mine_id;
@@ -63,22 +67,33 @@ const MapComponent = ({ mines, selectedMine, onMineSelect }) => {
           : 'http://maps.google.com/mapfiles/ms/icons/yellow-dot.png',
       });
 
-      marker.addListener('click', () => {
-        onMineSelect(mine);
-      });
+      // Store marker reference by mine ID for later updates
+      markerRefsMap.current[mine.properties.mine_id] = marker;
 
-      // Add info window
+      // Create info window with mine details
       const infoWindow = new window.google.maps.InfoWindow({
         content: `
-          <div style="padding: 10px; max-width: 200px;">
-            <h3 style="margin: 0 0 5px 0; font-weight: bold;">${mine.properties.display_name}</h3>
-            <p style="margin: 3px 0; font-size: 12px;"><strong>State:</strong> ${mine.properties.state}</p>
-            <p style="margin: 3px 0; font-size: 12px;"><strong>District:</strong> ${mine.properties.district}</p>
-            <p style="margin: 3px 0; font-size: 12px;"><strong>Sub-district:</strong> ${mine.properties.subdistrict}</p>
+          <div style="padding: 12px; max-width: 250px; font-family: Arial, sans-serif;">
+            <h3 style="margin: 0 0 8px 0; font-weight: bold; font-size: 14px;">${mine.properties.display_name}</h3>
+            <div style="font-size: 12px; line-height: 1.6;">
+              <p style="margin: 3px 0;"><strong>Mine ID:</strong> ${mine.properties.mine_id}</p>
+              <p style="margin: 3px 0;"><strong>State:</strong> ${mine.properties.state}</p>
+              <p style="margin: 3px 0;"><strong>District:</strong> ${mine.properties.district}</p>
+              <p style="margin: 3px 0;"><strong>Sub-district:</strong> ${mine.properties.subdistrict}</p>
+              <p style="margin: 3px 0;"><strong>Lat:</strong> ${lat.toFixed(6)}</p>
+              <p style="margin: 3px 0;"><strong>Lng:</strong> ${lng.toFixed(6)}</p>
+            </div>
           </div>
         `,
       });
 
+      // Click marker to select mine
+      marker.addListener('click', () => {
+        onMineSelect(mine);
+        infoWindow.open(map, marker);
+      });
+
+      // Show info window on hover
       marker.addListener('mouseover', () => {
         infoWindow.open(map, marker);
       });
@@ -91,25 +106,74 @@ const MapComponent = ({ mines, selectedMine, onMineSelect }) => {
     });
 
     setMarkers(newMarkers);
+  }, [map, mines, selectedMine, onMineSelect]);
 
-    // Re-center and zoom when selected mine changes
+  // Update marker colors when selected mine changes
+  useEffect(() => {
+    if (!selectedMine) return;
+
+    mines.forEach((mine) => {
+      const marker = markerRefsMap.current[mine.properties.mine_id];
+      if (marker) {
+        const isSelected = mine.properties.mine_id === selectedMine.properties.mine_id;
+        marker.setIcon(
+          isSelected
+            ? 'http://maps.google.com/mapfiles/ms/icons/red-dot.png'
+            : 'http://maps.google.com/mapfiles/ms/icons/yellow-dot.png'
+        );
+      }
+    });
+
+    // Pan to selected mine
     if (selectedMine) {
       const [lng, lat] = selectedMine.geometry.coordinates;
       map.panTo({ lat, lng });
-      map.setZoom(10);
+      map.setZoom(12);
     }
-  }, [mines, selectedMine, map]);
+  }, [selectedMine, map, mines]);
 
-  if (loading) {
-    return (
-      <div className="w-full h-full flex items-center justify-center bg-gray-200">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
-          <p className="text-gray-700">Loading map...</p>
-        </div>
-      </div>
-    );
-  }
+  // Add map click to place location marker
+  useEffect(() => {
+    if (!map) return;
+
+    const handleMapClick = (e) => {
+      // Remove previous click marker
+      if (clickMarker) {
+        clickMarker.setMap(null);
+      }
+
+      // Create new marker at clicked location
+      const newMarker = new window.google.maps.Marker({
+        position: e.latLng,
+        map,
+        title: `${e.latLng.lat().toFixed(4)}, ${e.latLng.lng().toFixed(4)}`,
+        icon: 'http://maps.google.com/mapfiles/ms/icons/blue-dot.png',
+      });
+
+      // Add info window to show coordinates
+      const infoWindow = new window.google.maps.InfoWindow({
+        content: `
+          <div style="padding: 10px;">
+            <p style="margin: 0; font-size: 12px;"><strong>Latitude:</strong> ${e.latLng.lat().toFixed(6)}</p>
+            <p style="margin: 5px 0 0 0; font-size: 12px;"><strong>Longitude:</strong> ${e.latLng.lng().toFixed(6)}</p>
+          </div>
+        `,
+      });
+
+      newMarker.addListener('click', () => {
+        infoWindow.open(map, newMarker);
+      });
+
+      infoWindow.open(map, newMarker);
+      setClickMarker(newMarker);
+    };
+
+    map.addListener('click', handleMapClick);
+
+    return () => {
+      window.google.maps.event.removeListener(map, 'click', handleMapClick);
+    };
+  }, [map, clickMarker]);
 
   if (error) {
     return (
